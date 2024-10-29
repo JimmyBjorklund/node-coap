@@ -7,11 +7,11 @@
  */
 
 import { EventEmitter } from 'events'
-import { isIPv6, AddressInfo } from 'net'
-import { CoapServerOptions, requestListener, CoapPacket, Block, MiddlewareParameters } from '../models/models'
+import { isIPv6, type AddressInfo } from 'net'
+import { type CoapServerOptions, type requestListener, type CoapPacket, type Block, type MiddlewareParameters } from '../models/models'
 import BlockCache from './cache'
 import OutgoingMessage from './outgoing_message'
-import { Socket, createSocket, SocketOptions } from 'dgram'
+import { Socket, createSocket, type SocketOptions } from 'dgram'
 import { LRUCache } from 'lru-cache'
 import os from 'os'
 import IncomingMessage from './incoming_message'
@@ -19,7 +19,7 @@ import ObserveStream from './observe_write_stream'
 import RetrySend from './retry_send'
 import { handleProxyResponse, handleServerRequest, parseRequest, proxyRequest } from './middlewares'
 import { parseBlockOption } from './block'
-import { generate, NamedOption, Option, ParsedPacket } from 'coap-packet'
+import { generate, type NamedOption, type Option, type ParsedPacket } from 'coap-packet'
 import { parseBlock2, createBlock2, getOption, isNumeric, isBoolean } from './helpers'
 import { parameters } from './parameters'
 import series from 'fastseries'
@@ -64,12 +64,15 @@ function allAddresses (type): string[] {
         family = 'IPv6'
     }
     const addresses: string[] = []
+    const macs: string[] = []
     const interfaces = os.networkInterfaces()
     for (const ifname in interfaces) {
         if (ifname in interfaces) {
             interfaces[ifname]?.forEach((a) => {
-                if (a.family === family) {
+                // Checking for repeating MAC address to avoid trying to listen on same interface twice
+                if (a.family === family && !macs.includes(a.mac)) {
                     addresses.push(a.address)
+                    macs.push(a.mac)
                 }
             })
         }
@@ -77,6 +80,7 @@ function allAddresses (type): string[] {
     return addresses
 }
 
+// eslint-disable-next-line @typescript-eslint/ban-types
 class CoapLRUCache<K extends {}, V extends {}> extends LRUCache<K, V> {
     pruneTimer: NodeJS.Timeout
 }
@@ -88,12 +92,14 @@ interface Block2CacheEntry {
 
 class CoAPServer extends EventEmitter {
     _options: CoapServerOptions = {}
-    _proxiedRequests: Map<string, MiddlewareParameters> = new Map()
+    _proxiedRequests = new Map<string, MiddlewareParameters>()
+    // eslint-disable-next-line @typescript-eslint/ban-types
     _middlewares: Function[]
     _multicastAddress: string | null
     _multicastInterface: string | null
     _lru: CoapLRUCache<string, any>
     _series: any
+    // eslint-disable-next-line @typescript-eslint/ban-types
     _block1Cache: BlockCache<Buffer | {}>
     _block2Cache: BlockCache<Block2CacheEntry | null>
     _sock: Socket | EventEmitter | null
@@ -140,12 +146,8 @@ class CoAPServer extends EventEmitter {
         this._middlewares.push(handleServerRequest)
 
         // Multicast settings
-        this._multicastAddress = (this._options.multicastAddress != null)
-            ? this._options.multicastAddress
-            : null
-        this._multicastInterface = (this._options.multicastInterface != null)
-            ? this._options.multicastInterface
-            : null
+        this._multicastAddress = this._options.multicastAddress ?? null
+        this._multicastInterface = this._options.multicastInterface ?? null
 
         // We use an LRU cache for the responses to avoid
         // DDOS problems.
@@ -202,6 +204,7 @@ class CoAPServer extends EventEmitter {
                 rsinfo,
                 server: this
             }
+            // eslint-disable-next-line @typescript-eslint/ban-types
             const activeMiddlewares: Function[] = []
 
             for (let i = 0; i < this._middlewares.length; i++) {
@@ -281,14 +284,15 @@ class CoAPServer extends EventEmitter {
                 }
             } catch (err) {
                 if (done != null) {
-                    return done(err)
+                    done(err)
+                    return
                 } else {
                     throw err
                 }
             }
 
             if (done != null) {
-                return done()
+                done()
             }
         })
 
@@ -411,7 +415,8 @@ class CoAPServer extends EventEmitter {
         const cached = lru.peek(this._toKey(request, packet, true))
 
         if (cached != null && !(packet.ack ?? false) && !(packet.reset ?? false) && sock instanceof Socket) {
-            return sock.send(cached, 0, cached.length, rsinfo.port, rsinfo.address)
+            sock.send(cached, 0, cached.length, rsinfo.port, rsinfo.address)
+            return
         } else if (cached != null && ((packet.ack ?? false) || (packet.reset ?? false))) {
             if (cached.response != null && (packet.reset ?? false)) {
                 cached.response.end()
@@ -435,12 +440,13 @@ class CoAPServer extends EventEmitter {
         }
 
         if (packet.code === '0.05' && request.headers['Content-Format'] == null) {
-            return this._sendError(
+            this._sendError(
                 Buffer.from('FETCH requests must contain a Content-Format option'),
                 rsinfo,
                 undefined,
                 '4.15' /* TODO: Check if this is the correct error code */
             )
+            return
         }
 
         const cacheKey = this._toCacheKey(request, packet)
@@ -668,6 +674,7 @@ to handle cached answer and blockwise (2)
 */
 class OutMessage extends OutgoingMessage {
     _cachekey: string
+    // eslint-disable-next-line @typescript-eslint/ban-types
     _addCacheEntry: Function
 
     /**
